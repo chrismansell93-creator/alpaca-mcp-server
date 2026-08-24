@@ -45,9 +45,36 @@ def get_mcp_user_agent() -> str:
     return f"APCA-MCP-TRADING/{strip_v_from_version(release_version)}"
 
 
+_OPENAPI_LITERAL_FIELDS = frozenset({"default", "example", "examples"})
+_OPENAPI_NAMED_MAP_FIELDS = frozenset({"properties", "schemas"})
+
+
+def _strip_openapi_vendor_extensions(value: Any) -> Any:
+    """Remove extensions without dropping x-prefixed schema data."""
+    if isinstance(value, dict):
+        cleaned: dict[str, Any] = {}
+        for key, item in value.items():
+            if key.startswith("x-"):
+                continue
+            if key in _OPENAPI_LITERAL_FIELDS:
+                cleaned[key] = item
+            elif key in _OPENAPI_NAMED_MAP_FIELDS and isinstance(item, dict):
+                cleaned[key] = {
+                    name: _strip_openapi_vendor_extensions(entry)
+                    for name, entry in item.items()
+                }
+            else:
+                cleaned[key] = _strip_openapi_vendor_extensions(item)
+        return cleaned
+    if isinstance(value, list):
+        return [_strip_openapi_vendor_extensions(item) for item in value]
+    return value
+
+
 def _load_spec(name: str) -> dict[str, Any]:
     path = SPECS_DIR / f"{name}.json"
-    return json.loads(path.read_text(encoding="utf-8"))
+    spec = json.loads(path.read_text(encoding="utf-8"))
+    return _strip_openapi_vendor_extensions(spec)
 
 
 def _make_filter(allowed_ops: set[str]):

@@ -28,6 +28,7 @@ from alpaca_mcp_server.security import DATA_KEY, SECURITY_KEY
 from alpaca_mcp_server.server import (
     _build_auth_headers,
     _make_api_client,
+    _strip_openapi_vendor_extensions,
     build_server,
     get_mcp_user_agent,
     strip_v_from_version,
@@ -317,6 +318,45 @@ async def test_empty_user_agent_opts_out():
 )
 def test_strip_v_from_version(release_version: str, expected: str) -> None:
     assert strip_v_from_version(release_version) == expected
+
+
+def test_strip_openapi_vendor_extensions_recursively():
+    spec = {
+        "x-stoplight": {"id": "schema"},
+        "properties": {
+            "x-symbol": {
+                "type": "object",
+                "x-go-type": "legacySymbol",
+                "default": {"x-source": "user"},
+                "example": {"x-value": 1},
+            },
+        },
+        "components": {
+            "schemas": {
+                "x-Order": {
+                    "type": "string",
+                    "x-go-type": "legacyOrder",
+                },
+            },
+        },
+    }
+
+    assert _strip_openapi_vendor_extensions(spec) == {
+        "properties": {
+            "x-symbol": {
+                "type": "object",
+                "default": {"x-source": "user"},
+                "example": {"x-value": 1},
+            },
+        },
+        "components": {
+            "schemas": {
+                "x-Order": {
+                    "type": "string",
+                },
+            },
+        },
+    }
 
 
 async def test_tool_count():
