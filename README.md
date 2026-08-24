@@ -551,7 +551,7 @@ alpaca-mcp-server/
 │       ├── overrides.py      ← Hand-crafted tools for complex trading endpoints
 │       ├── market_data_overrides.py ← Hand-crafted tools for historical data
 │       ├── readme_docs.py    ← Read-only proxy tools for Alpaca ReadMe docs
-│       ├── schema_compat.py  ← Tool schema normalization for strict clients (Gemini)
+│       ├── schema_compat.py  ← Flatten one-branch allOf so enum values are visible
 │       └── specs/
 │           ├── trading-api.json
 │           └── market-data-api.json
@@ -559,7 +559,7 @@ alpaca-mcp-server/
 │   ├── conftest.py           ← Shared fixtures and paper-account cleanup
 │   ├── test_integrity.py     ← Spec ↔ toolset ↔ names consistency checks
 │   ├── test_server_construction.py ← Server build verification
-│   ├── test_schema_compat.py ← Tool schema compatibility checks
+│   ├── test_schema_compat.py ← Flattening of one-branch allOf wrappers
 │   ├── test_readme_integration.py ← Live ReadMe docs MCP integration tests
 │   └── test_paper_integration.py   ← Paper API integration tests
 ├── scripts/

@@ -1,17 +1,11 @@
 """
-Tests for schema normalization aimed at strict function-calling clients.
+Tests for flattening one-branch allOf wrappers in tool schemas.
 
 Covers:
 - Single-branch allOf is merged so the enum it hides becomes visible
 - Multi-branch allOf is left alone
-- The plural examples array becomes the singular example Gemini reads
-- A type array becomes anyOf, and a numeric enum becomes a numeric range
 - Author-chosen names and literal data are not mistaken for schema keywords
-- Every advertised tool schema stays inside what Gemini accepts
-
-The rules asserted here were derived by validating the real tool schemas
-against ``google.genai.types.Schema``, which is generated from the same proto
-the Gemini endpoint parses.
+- Advertised sort parameters expose their enum to clients
 """
 
 from __future__ import annotations
@@ -21,10 +15,7 @@ from unittest.mock import patch
 
 from fastmcp.client import Client
 
-from alpaca_mcp_server.schema_compat import (
-    GEMINI_SCHEMA_KEYWORDS,
-    normalize_tool_schema,
-)
+from alpaca_mcp_server.schema_compat import flatten_single_branch_allof
 from alpaca_mcp_server.server import build_server
 
 DUMMY_ENV = {
@@ -32,39 +23,6 @@ DUMMY_ENV = {
     "ALPACA_SECRET_KEY": "test-secret",
     "ALPACA_PAPER_TRADE": "true",
 }
-
-# Positions where a nested value is itself a schema, so recursion must continue.
-_NAMED_MAPS = frozenset({"properties", "$defs", "definitions", "patternProperties"})
-_SUB_SCHEMAS = frozenset(
-    {"items", "additionalProperties", "not", "if", "then", "else", "contains"}
-)
-_SCHEMA_LISTS = frozenset({"anyOf", "oneOf", "allOf", "prefixItems"})
-_LITERALS = frozenset({"const", "default", "example", "examples"})
-
-
-def _collect_violations(schema, path: str, found: list[str]) -> None:
-    """Walk a schema and record anything Gemini's Schema proto would reject."""
-    if not isinstance(schema, dict):
-        return
-    for key, value in schema.items():
-        if key not in GEMINI_SCHEMA_KEYWORDS:
-            found.append(f"{path}: unsupported keyword {key!r}")
-        if key == "type" and isinstance(value, list):
-            found.append(f"{path}: type must be a single value, got {value!r}")
-        if key == "enum" and isinstance(value, list):
-            non_strings = [v for v in value if not isinstance(v, str)]
-            if non_strings:
-                found.append(f"{path}: enum must be strings, got {non_strings!r}")
-        if key in _LITERALS:
-            continue
-        if key in _NAMED_MAPS and isinstance(value, dict):
-            for name, entry in value.items():
-                _collect_violations(entry, f"{path}.{name}", found)
-        elif key in _SUB_SCHEMAS:
-            _collect_violations(value, f"{path}.{key}", found)
-        elif key in _SCHEMA_LISTS and isinstance(value, list):
-            for index, entry in enumerate(value):
-                _collect_violations(entry, f"{path}.{key}[{index}]", found)
 
 
 async def _list_tools() -> list:
@@ -89,7 +47,7 @@ def test_single_branch_allof_is_merged():
         "description": "from the sibling",
     }
 
-    assert normalize_tool_schema(schema) == {
+    assert flatten_single_branch_allof(schema) == {
         "type": "string",
         "enum": ["asc", "desc"],
         "default": "asc",
@@ -102,7 +60,7 @@ def test_multi_branch_allof_is_left_alone():
     """Merging an intersection of two branches would change what it accepts."""
     schema = {"allOf": [{"type": "string"}, {"maxLength": 4}]}
 
-    assert normalize_tool_schema(schema) == schema
+    assert flatten_single_branch_allof(schema) == schema
 
 
 def test_nested_single_branch_allof_is_merged():
@@ -113,54 +71,10 @@ def test_nested_single_branch_allof_is_merged():
         },
     }
 
-    assert normalize_tool_schema(schema) == {
+    assert flatten_single_branch_allof(schema) == {
         "type": "object",
         "properties": {"sort": {"enum": ["asc"], "type": "string"}},
     }
-
-
-def test_examples_array_becomes_singular_example():
-    schema = {"type": "string", "examples": ["FILL", "TRANS"]}
-
-    assert normalize_tool_schema(schema) == {"type": "string", "example": "FILL"}
-
-
-def test_existing_example_survives_examples_removal():
-    schema = {"type": "string", "example": "kept", "examples": ["dropped"]}
-
-    assert normalize_tool_schema(schema) == {"type": "string", "example": "kept"}
-
-
-def test_type_array_becomes_anyof():
-    schema = {"type": ["string", "null"], "description": "kept"}
-
-    assert normalize_tool_schema(schema) == {
-        "anyOf": [{"type": "string"}, {"type": "null"}],
-        "description": "kept",
-    }
-
-
-def test_single_entry_type_array_becomes_a_plain_type():
-    schema = {"type": ["string"]}
-
-    assert normalize_tool_schema(schema) == {"type": "string"}
-
-
-def test_numeric_enum_becomes_a_range():
-    schema = {"type": "integer", "enum": [0, 1, 2, 3], "description": "0=off"}
-
-    assert normalize_tool_schema(schema) == {
-        "type": "integer",
-        "description": "0=off",
-        "minimum": 0,
-        "maximum": 3,
-    }
-
-
-def test_string_enum_is_kept():
-    schema = {"type": "string", "enum": ["asc", "desc"]}
-
-    assert normalize_tool_schema(schema) == schema
 
 
 def test_property_named_like_a_keyword_is_not_treated_as_one():
@@ -169,36 +83,24 @@ def test_property_named_like_a_keyword_is_not_treated_as_one():
         "type": "object",
         "properties": {
             "allOf": {"type": "string"},
-            "examples": {"type": "string"},
         },
     }
 
-    assert normalize_tool_schema(schema) == schema
+    assert flatten_single_branch_allof(schema) == schema
 
 
 def test_literal_data_is_not_rewritten():
     """default holds a value, so keys inside it are data and must be untouched."""
-    schema = {"type": "object", "default": {"allOf": 1, "examples": [2]}}
+    schema = {"type": "object", "default": {"allOf": [{"enum": ["x"]}]}}
 
-    assert normalize_tool_schema(schema) == schema
-
-
-def test_normalization_is_idempotent():
-    schema = {"allOf": [{"enum": ["asc"]}], "type": "string", "examples": ["asc"]}
-    once = normalize_tool_schema(schema)
-
-    assert normalize_tool_schema(once) == once
+    assert flatten_single_branch_allof(schema) == schema
 
 
-async def test_tool_schemas_are_gemini_compatible():
-    """Guards issue #71: one rejected tool makes Gemini 400 the whole request."""
-    tools = await _list_tools()
+def test_flattening_is_idempotent():
+    schema = {"allOf": [{"enum": ["asc"]}], "type": "string"}
+    once = flatten_single_branch_allof(schema)
 
-    violations: list[str] = []
-    for tool in tools:
-        _collect_violations(tool.inputSchema or {}, tool.name, violations)
-
-    assert not violations, "Gemini would reject:\n" + "\n".join(sorted(violations))
+    assert flatten_single_branch_allof(once) == once
 
 
 async def test_sort_enum_is_visible_to_clients():
