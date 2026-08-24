@@ -20,6 +20,7 @@ from fastmcp import FastMCP
 from fastmcp.server.providers.openapi.routing import MCPType
 
 from .readme_docs import ReadMeClientFactory, register_readme_docs_tools
+from .schema_compat import SchemaCompatMiddleware
 from .security import TrustBoundaryMiddleware
 from .tool_registry import TOOL_DESCRIPTIONS, TOOL_NAMES
 from .toolsets import OVERRIDE_OPERATION_IDS, TOOLSETS, get_active_operations
@@ -172,6 +173,7 @@ def build_server(
 
     main = FastMCP("Alpaca MCP Server", lifespan=lifespan)
     main.add_middleware(TrustBoundaryMiddleware())
+    main.add_middleware(SchemaCompatMiddleware())
 
     if trading_client is not None:
         allowed = spec_ops["trading"]
